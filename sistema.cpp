@@ -1,6 +1,35 @@
 #include "sistema.h"
+#include <limits>    // para numeric_limits
+#include <tuple>     // para tuple
+#include <cmath>     // para llabs
+#include <functional> // para greater<>
+
 
 using namespace std;
+
+// ————————————
+// Implementación de los constructores y el comparador
+//————————————
+HuffmanNode::HuffmanNode(int s, unsigned long f)
+  : symbol(s), freq(f), left(nullptr), right(nullptr) {}
+
+bool CompareNode::operator()(HuffmanNode* a, HuffmanNode* b) const {
+    // para que la priority_queue ponga primero el de menor freq
+    return a->freq > b->freq;
+}
+
+// ————————————
+// Helper recursivo para llenar vector<string> codes
+//————————————
+void ImageProcessingSystem::buildCodes(HuffmanNode* node,
+                                       const string& prefix,
+                                       vector<string>& codes) const {
+    if (!node) return;
+    if (node->symbol >= 0)            // hoja
+        codes[node->symbol] = prefix;
+    buildCodes(node->left,  prefix + '0', codes);
+    buildCodes(node->right, prefix + '1', codes);
+}
 
 void ImageProcessingSystem::start() {
     cout << "Bienvenido al Sistema de Procesamiento de Imágenes. Escriba 'ayuda' para ver los comandos disponibles." << endl;
@@ -21,7 +50,7 @@ void ImageProcessingSystem::start() {
 
 void ImageProcessingSystem::handleCommand(string command) {
     string cmd, param, extra;
-        int spacePos = command.find(' ');
+        size_t spacePos = command.find(' ');
 
         if (spacePos != string::npos) {
             cmd = command.substr(0, spacePos);
@@ -155,7 +184,7 @@ void ImageProcessingSystem::loadImage(string filename) {
 
 void ImageProcessingSystem::loadVolume(string param) {
     // Buscar la posición del primer espacio en la cadena
-    int spacePos = param.find(' ');
+    size_t spacePos = param.find(' ');
     if (spacePos == string::npos) {
         cout << "Uso incorrecto del comando. Escriba 'ayuda cargar_volumen' para más información." << endl;
         return;
@@ -221,8 +250,8 @@ void ImageProcessingSystem::loadVolume(string param) {
         vector<vector<int>> resizedImage(maxHeight, vector<int>(maxWidth, 0));
 
         // Copiar los valores de la imagen original a la nueva imagen redimensionada
-        for (int i = 0; i < image.size(); i++) {
-            for (int j = 0; j < image[i].size(); j++) {
+        for (size_t i = 0; i < image.size(); i++) {
+            for (size_t j = 0; j < image[i].size(); j++) {
                 resizedImage[i][j] = image[i][j];  // Copiar el valor original
             }
         }
@@ -407,12 +436,216 @@ void ImageProcessingSystem::projection2D(string param) {
     cout << "Proyección 2D guardada en " << filename << endl;
 }
 void ImageProcessingSystem::encodeImage(string param) {
-    cout << "No hay una imagen cargada en memoria." << endl;
+    if (imageFilename.empty()) {                                        // 1. Verifica si hay una imagen cargada
+        cout << "No hay una imagen cargada en memoria." << endl;
+        return;                                                        //    Si no, sale
+    }
+    string outName = param;                                             // 2. Nombre de salida (.huf)
+    if (outName.find(".huf") == string::npos) outName += ".huf";        //    Añade extensión si falta
+
+    // 3. Contar frecuencias de cada nivel de gris
+    vector<unsigned long> freq(maxPixelValue + 1, 0);
+    for (int i = 0; i < height; ++i)                                    //    Recorre filas
+        for (int j = 0; j < width; ++j)                                //    y columnas
+            freq[ imageData[i][j] ]++;
+
+    // 4. Construir el árbol de Huffman
+    priority_queue<HuffmanNode*, vector<HuffmanNode*>, CompareNode> pq;
+    for (int i = 0; i <= maxPixelValue; ++i)                           //    Para cada símbolo
+        pq.push(new HuffmanNode(i, freq[i]));                         //    crea un nodo y añade
+
+    while (pq.size() > 1) {                                            //    Hasta que quede solo la raíz
+        HuffmanNode* n1 = pq.top(); pq.pop();                          // 1) Extrae nodo de menor freq
+        HuffmanNode* n2 = pq.top(); pq.pop();                          // 2) Extrae siguiente menor
+        HuffmanNode* parent = new HuffmanNode(-1, n1->freq + n2->freq);// 3) Nodo interno suma freq
+        parent->left = n1;                                             //    Hijos
+        parent->right = n2;
+        pq.push(parent);                                               // 4) Reinsertar
+    }
+    HuffmanNode* root = pq.top();
+
+    // 5. Generar códigos binarios
+    vector<string> codes(maxPixelValue + 1);
+    buildCodes(root, "", codes);                                      // Llenar vector codes
+
+    // 6. Abrir archivo binario para escritura
+    ofstream out(outName, ios::binary);
+    unsigned short w = width, h = height;
+    unsigned char m = static_cast<unsigned char>(maxPixelValue);
+    out.write(reinterpret_cast<char*>(&w), sizeof(w));                // Escribir ancho
+    out.write(reinterpret_cast<char*>(&h), sizeof(h));                // Escribir alto
+    out.put(static_cast<char>(m));                                    // Escribir M
+
+    // 7. Escribir frecuencias
+    for (int i = 0; i <= maxPixelValue; ++i)
+        out.write(reinterpret_cast<char*>(&freq[i]), sizeof(unsigned long));
+
+    // 8. Empaquetar bits y escribir datos comprimidos
+    string bitBuffer;
+    for (int i = 0; i < height; ++i)
+        for (int j = 0; j < width; ++j)
+            bitBuffer += codes[ imageData[i][j] ];                   // concatenar códigos
+
+    size_t idx = 0;
+    while (idx < bitBuffer.size()) {                                  // Hasta recorrer todo
+        unsigned char byte = 0;
+        for (int b = 0; b < 8; ++b) {
+            byte <<= 1;
+            if (idx < bitBuffer.size() && bitBuffer[idx++] == '1')
+                byte |= 1;                                           // setea bit a 1 si corresponde
+        }
+        out.put(static_cast<char>(byte));                            // escribir byte
+    }
+    out.close();                                                      // cerrar archivo
+
+    cout << "La imagen en memoria ha sido codificada exitosamente y almacenada en el archivo "
+         << outName << "." << endl;                                  // Mensaje de éxito
     }
 void ImageProcessingSystem::decodeFile(string param) {
-  cout << "El archivo no ha podido ser decodificado." << endl;
+  stringstream ss(param);
+    string inName, pgmName;
+    ss >> inName >> pgmName;                                          // 1. Obtener nombres
+
+    ifstream in(inName, ios::binary);
+    if (!in) {                                                        // 2. Verificar apertura
+        cout << "El archivo " << inName << " no ha podido ser decodificado." << endl;
+        return;
+    }
+
+    unsigned short w, h;
+    unsigned char m;
+    in.read(reinterpret_cast<char*>(&w), sizeof(w));                  // 3. Leer ancho
+    in.read(reinterpret_cast<char*>(&h), sizeof(h));                  // 4. Leer alto
+    in.read(reinterpret_cast<char*>(&m), 1);                          // 5. Leer M
+
+    int maxVal = static_cast<int>(m);
+    vector<unsigned long> freq(maxVal + 1);
+    for (int i = 0; i <= maxVal; ++i)
+        in.read(reinterpret_cast<char*>(&freq[i]), sizeof(unsigned long)); // 6. Leer frecuencias
+
+    // 7. Reconstruir árbol de Huffman (similar a encode)
+    priority_queue<HuffmanNode*, vector<HuffmanNode*>, CompareNode> pq;
+    for (int i = 0; i <= maxVal; ++i)
+        pq.push(new HuffmanNode(i, freq[i]));
+    while (pq.size() > 1) {
+        HuffmanNode* n1 = pq.top(); pq.pop();
+        HuffmanNode* n2 = pq.top(); pq.pop();
+        HuffmanNode* parent = new HuffmanNode(-1, n1->freq + n2->freq);
+        parent->left = n1; parent->right = n2;
+        pq.push(parent);
+    }
+    HuffmanNode* root = pq.top();
+
+    // 8. Leer el resto como bytes y decodificar
+    vector<vector<int>> img(h, vector<int>(w));
+    HuffmanNode* node = root;
+    int i = 0, j = 0;
+    char byte;
+    while (in.get(byte)) {
+        for (int b = 7; b >= 0; --b) {                                // leer bit a bit
+            bool bit = (byte >> b) & 1;
+            node = bit ? node->right : node->left;                   // seguir en el árbol
+            if (node->symbol >= 0) {                                 // si es hoja
+                img[i][j++] = node->symbol;
+                node = root;                                         // volver a raíz
+                if (j == w) { j = 0; if (++i == h) break; }         // siguiente pixel/fila
+            }
+        }
+        if (i == h) break;                                            // terminado
+    }
+    in.close();                                                      // cerrar
+
+    // 9. Escribir PGM resultante
+    ofstream out(pgmName);
+    out << "P2\n" << w << " " << h << "\n" << maxVal << "\n";
+    for (auto& row : img) {
+        for (int pix : row) out << pix << " ";
+        out << "\n";
+    }
+    out.close();
+
+    cout << "El archivo " << inName << " ha sido decodificado exitosamente y guardado en "
+         << pgmName << "." << endl;                                 // Éxito
     }
 void ImageProcessingSystem::segmentImage(string param) {
-  cout << "No hay una imagen cargada en memoria." << endl;
+    // 1) Parsear parámetros: nombre de salida + semillas
+    stringstream ss(param);
+    string outName;
+    ss >> outName;
+    vector<tuple<int,int,int>> seeds;
+    int sx, sy, sl;
+    while (ss >> sx >> sy >> sl) {
+        seeds.emplace_back(sx, sy, sl);
     }
+
+    // 2) Validar que hay imagen cargada
+    if (imageData.empty()) {
+        cout << "No hay una imagen cargada en memoria." << endl;
+        return;
+    }
+    // 3) Validar semillas (1 a 5)
+    if (seeds.empty() || seeds.size() > 5) {
+        cout << "La imagen en memoria no pudo ser segmentada." << endl;
+        return;
+    }
+
+    int H = height, W = width;
+    // 4) Preparar estructuras de Dijkstra
+    vector<vector<long long>> dist(H, vector<long long>(W, numeric_limits<long long>::max()));
+    vector<vector<int>> labels(H, vector<int>(W, 0));
+    using State = tuple<long long,int,int,int>; // (dist, y, x, etiqueta)
+    priority_queue<State, vector<State>, greater<State>> pq;
+
+    // 5) Inicializar cola con las semillas (convertir de 1-based a 0-based)
+    for (auto &t : seeds) {
+        int x = get<0>(t) - 1;
+        int y = get<1>(t) - 1;
+        int lbl = get<2>(t);
+        if (x < 0 || x >= W || y < 0 || y >= H) {
+            cout << "La imagen en memoria no pudo ser segmentada." << endl;
+            return;
+        }
+        dist[y][x] = 0;
+        labels[y][x] = lbl;
+        pq.emplace(0LL, y, x, lbl);
+    }
+
+    // 6) Ejecutar Dijkstra multifuente
+    int dx[4] = {1,-1,0,0}, dy[4] = {0,0,1,-1};
+    while (!pq.empty()) {
+        auto [d, y, x, lbl] = pq.top(); pq.pop();
+        if (d > dist[y][x]) continue;
+        for (int i = 0; i < 4; ++i) {
+            int nx = x + dx[i], ny = y + dy[i];
+            if (nx>=0 && nx<W && ny>=0 && ny<H) {
+                long long w = llabs(imageData[ny][nx] - imageData[y][x]);
+                long long nd = d + w;
+                if (nd < dist[ny][nx]) {
+                    dist[ny][nx] = nd;
+                    labels[ny][nx] = lbl;
+                    pq.emplace(nd, ny, nx, lbl);
+                }
+            }
+        }
+    }
+
+    // 7) Guardar resultado como PGM (cada píxel “coloreado” con su etiqueta)
+    ofstream out(outName);
+    if (!out) {
+        cout << "La imagen en memoria no pudo ser segmentada." << endl;
+        return;
+    }
+    out << "P2\n" << W << " " << H << "\n255\n";
+    for (int i = 0; i < H; ++i) {
+        for (int j = 0; j < W; ++j) {
+            out << labels[i][j] << " ";
+        }
+        out << "\n";
+    }
+    out.close();
+
+    cout << "La imagen en memoria fue segmentada correctamente y almacenada en el archivo "
+         << outName << "." << endl;
+}
+
   

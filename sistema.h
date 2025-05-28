@@ -8,9 +8,20 @@
 #include <string>
 #include <algorithm>
 #include <numeric>
-
+#include <queue>
 using namespace std;
 
+struct HuffmanNode {
+    int symbol;             // Valor de intensidad (0..M) o -1 si es nodo interno
+    unsigned long freq;     // Frecuencia de aparición
+    HuffmanNode* left;      // Hijo izquierdo
+    HuffmanNode* right;     // Hijo derecho
+
+    HuffmanNode(int s, unsigned long f);
+};
+struct CompareNode {
+    bool operator()(HuffmanNode* a, HuffmanNode* b) const;
+};
 class ImageProcessingSystem {
 private:
     //  Atributos privados
@@ -29,7 +40,7 @@ private:
     void encodeImage(string param);
     void decodeFile(string param);
     void segmentImage(string param);
-
+    void buildCodes(HuffmanNode* node,const string& prefix,vector<string>& codes) const;
     void handleCommand(string command);
     void showHelp(string cmd);
 
